@@ -2504,6 +2504,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
         lenaddr = sizeof(inaddr);
         connection = accept(listener[i], &inaddr.sa, &lenaddr);
         if( connection>=0 ){
+            //Right HERE
           child = fork();
           if( child!=0 ){
             if( child>0 ) nchildren++;
@@ -2607,9 +2608,25 @@ int main(int argc, const char **argv){
       TestParseRfc822Date();
       printf("Ok\n");
       exit(0);
+    }else if(strcmp(z, "-threads")==0){
+        //Store a variable and create the data struct
+    }else if(strcmp(z, "-buffers")==0) {
+        //Store a variable and create the data struct
+    }else if(strcmp(z, "-schedalg")==0) {
+        //Switch case
+        if(zArg=="FIFO"){
+
+        }else if(zArg=="HPIC"){
+
+        }else if(zArg == "HPHC"){
+
+        }else{
+            Malfunction(515, /* LOG: unknown command-line argument on launch */
+                        "unknown argument: [%s]\n", z);
+        }
     }else{
-      Malfunction(515, /* LOG: unknown command-line argument on launch */
-                  "unknown argument: [%s]\n", z);
+            Malfunction(515, /* LOG: unknown command-line argument on launch */
+                        "unknown argument: [%s]\n", z);
     }
     argv += 2;
     argc -= 2;
