@@ -281,6 +281,7 @@
 #include <sys/sendfile.h>
 #endif
 #include <assert.h>
+#include <pthread.h>
 
 /*
 ** Configure the server by setting the following macros and recompiling.
