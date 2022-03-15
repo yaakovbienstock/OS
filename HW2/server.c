@@ -376,6 +376,9 @@ static char *zScgi = 0;          /* Value of the SCGI env variable */
 static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
+static int schedAlg = 0; /* 1 is FIFO, 2 is HPIC, 3 is HPHC   */
+static int sizeOfThreadPool = 0;
+static int bufferSize = 0;
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -2611,16 +2614,18 @@ int main(int argc, const char **argv){
       exit(0);
     }else if(strcmp(z, "-threads")==0){
         //Store a variable and create the data struct
+        sizeOfThreadPool = atoi(zArg);
     }else if(strcmp(z, "-buffers")==0) {
         //Store a variable and create the data struct
+        bufferSize = atoi(zArg);
     }else if(strcmp(z, "-schedalg")==0) {
         //Switch case
         if(zArg=="FIFO"){
-
+            schedAlg = 1;
         }else if(zArg=="HPIC"){
-
+            schedAlg = 2;
         }else if(zArg == "HPHC"){
-
+            schedAlg = 3;
         }else{
             Malfunction(515, /* LOG: unknown command-line argument on launch */
                         "unknown argument: [%s]\n", z);
@@ -2631,7 +2636,18 @@ int main(int argc, const char **argv){
     }
     argv += 2;
     argc -= 2;
-  }
+  }//Done parsing command line
+
+  //pthread_t threadPool[sizeOfThreadPool];
+  //for(int i = 0; i<sizeOfThreadPool; i++){
+      //if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
+      //    perror("Thread wasn't created");
+      //}
+  //}
+
+
+
+
   if( zRoot==0 ){
     if( standalone ){
       zRoot = ".";
