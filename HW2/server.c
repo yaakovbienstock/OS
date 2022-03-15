@@ -2638,17 +2638,20 @@ int main(int argc, const char **argv){
     argc -= 2;
   }//Done parsing command line
 
-  //pthread_t threadPool[sizeOfThreadPool];
-  //int i;
-  //for(i = 0; i<sizeOfThreadPool; i++){
-      //if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
-      //    perror("Thread wasn't created");
-      //}
-  //}
+  /*pthread_t threadPool[sizeOfThreadPool];
+    int i;
+    for(i = 0; i<sizeOfThreadPool; i++){
+      if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
+        perror("Thread wasn't created");
+      }
+  }*/
   /*
     Perhaps a for loop using pthread_detach instead of joining just a thought
     --Bienstock
     for(i=0; i<i<sizeOfThreadPool; i++){
+      if(pthread_detach(&threadPool[i])!=0){
+        perror("Thread couldn't detach")
+      }
       Figure out how to use detach, perhaps look at video again
     }
   */
