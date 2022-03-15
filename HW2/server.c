@@ -2654,6 +2654,19 @@ int main(int argc, const char **argv){
       }
       Figure out how to use detach, perhaps look at video again
     }
+
+    Each 'Worker Thread' can only handle static web pages (files)
+
+    Threads read what is on the network descriptor, obtains the specified content
+    (by reading the specified static file), and then returns the content to the client
+    by writing the to the descriptor
+
+    Create a buffer of size buffersize which holds most likely char *
+    to hold the addresses of the requests
+
+    Then create a method that has the threads get the requests nd execute them
+
+    No busy waiting!!!
   */
 
 
