@@ -2620,11 +2620,11 @@ int main(int argc, const char **argv){
         bufferSize = atoi(zArg);
     }else if(strcmp(z, "-schedalg")==0) {
         //Switch case
-        if(zArg=="FIFO"){
+        if(strcmp(zArg,"FIFO")==0){
             schedAlg = 1;
-        }else if(zArg=="HPIC"){
+        }else if(strcmp(zArg,"HPIC")==0){
             schedAlg = 2;
-        }else if(zArg == "HPHC"){
+        }else if(strcmp(zArg,"HPHC")==0){
             schedAlg = 3;
         }else{
             Malfunction(515, /* LOG: unknown command-line argument on launch */
