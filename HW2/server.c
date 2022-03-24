@@ -745,7 +745,7 @@ static void StartResponse(const char *zResultCode){
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += althttpd_printf("%s %s\r\n",
+  nOut += althttpd_("%s %s\r\n",
                           zProtocol ? zProtocol : "HTTP/1.1",
                           zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
@@ -2506,6 +2506,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
     for(i=0; i<n; i++){
       if( FD_ISSET(listener[i], &readfds) ){
         lenaddr = sizeof(inaddr);
+        //connection is an httpConnection (int) / fileDescriptor
         connection = accept(listener[i], &inaddr.sa, &lenaddr);
         if( connection>=0 ){
             //Right HERE
@@ -2517,7 +2518,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
           }else{
             int nErr = 0, fd;
             close(0);
-            fd = dup(connection);
+            fd = dup(connection); //duplicate socket into stdin
             if( fd!=0 ) nErr++;
             close(1);
             fd = dup(connection);
@@ -2538,6 +2539,13 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   /* NOT REACHED */  
   exit(1);
 }
+
+void* threadStarter(void* args){
+    while(1){
+
+    }
+}
+
 
 int main(int argc, const char **argv){
   int i;                     /* Loop counter */
@@ -2638,30 +2646,30 @@ int main(int argc, const char **argv){
     argc -= 2;
   }//Done parsing command line
 
-  /*pthread_t threadPool[sizeOfThreadPool];
-    int i;
+    pthread_t threadPool[sizeOfThreadPool];
+
     for(i = 0; i<sizeOfThreadPool; i++){
-      if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
+      if(pthread_create(&threadPool[i],NULL,&threadStarter,NULL)!=0){
         perror("Thread wasn't created");
       }
-  }*/
-  /*
-    Perhaps a for loop using pthread_detach instead of joining just a thought
-    --Bienstock
-    for(i=0; i<i<sizeOfThreadPool; i++){
-      if(pthread_detach(&threadPool[i])!=0){
-        perror("Thread couldn't detach")
-      }
-      Figure out how to use detach, perhaps look at video again
-    }
+  }
 
+    //Perhaps a for loop using pthread_detach instead of joining just a thought
+    //--Bienstock
+    for(i = 0; i<i<sizeOfThreadPool; i++){
+      if(pthread_detach(&threadPool[i])!=0){
+        perror("Thread couldn't detach");
+      }
+      //Figure out how to use detach, perhaps look at video again
+    }
+  /*
     Each 'Worker Thread' can only handle static web pages (files)
 
     Threads read what is on the network descriptor, obtains the specified content
     (by reading the specified static file), and then returns the content to the client
     by writing the to the descriptor
 
-    Create a buffer of size buffersize which holds most likely char *
+    Create a buffer of size buffersize which holds most likely int (httpConnection variable (the fileDescriptor in main)
     to hold the addresses of the requests
 
     Then create a method that has the threads get the requests nd execute them
