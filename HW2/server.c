@@ -745,7 +745,7 @@ static void StartResponse(const char *zResultCode){
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += althttpd_("%s %s\r\n",
+  nOut += althttpd_printf("%s %s\r\n",
                           zProtocol ? zProtocol : "HTTP/1.1",
                           zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
