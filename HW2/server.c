@@ -745,7 +745,7 @@ static void StartResponse(const char *zResultCode){
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += althttpd_printf("%s %s\r\n",
+  nOut += fprintf(file,"%s %s\r\n",
                           zProtocol ? zProtocol : "HTTP/1.1",
                           zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
@@ -754,9 +754,9 @@ static void StartResponse(const char *zResultCode){
     closeConnection = 1;
   }
   if( closeConnection ){
-    nOut += althttpd_printf("Connection: close\r\n");
+    nOut += fprintf(file,"Connection: close\r\n");
   }else{
-    nOut += althttpd_printf("Connection: keep-alive\r\n");
+    nOut += fprintf(file,"Connection: keep-alive\r\n");
   }
   nOut += DateTag("Date", now);
   
@@ -1439,6 +1439,7 @@ static int SendFile(
   const char *zFile,      /* Name of the file to send */
   int lenFile,            /* Length of the zFile name in bytes */
   struct stat *pStat      /* Result of a stat() against zFile */
+  int fd                  /* File descriptor for conversion*/
 ){
   const char *zContentType;
   time_t t;
@@ -1452,13 +1453,14 @@ static int SendFile(
    || (zIfModifiedSince!=0
         && (t = ParseRfc822Date(zIfModifiedSince))>0
         && t>=pStat->st_mtime)
-  ){
+  ){    
+    FILE file= fdopen(fd, r+);
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
-    nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
-    nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
-    nOut += althttpd_printf("\r\n");
-    fflush(stdout);
+    nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
+    nOut += fprintf(file,"ETag: \"%s\"\r\n", zETag);
+    nOut += fprintf(file, "\r\n");
+    fflush(file);
     MakeLogEntry(0, 470);  /* LOG: ETag Cache Hit */
     return 1;
   }
@@ -1469,7 +1471,7 @@ static int SendFile(
     if( rangeEnd>=pStat->st_size ){
       rangeEnd = pStat->st_size-1;
     }
-    nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
+    nOut += fprintf(file, "Content-Range: bytes %d-%d/%d\r\n",
                     rangeStart, rangeEnd, (int)pStat->st_size);
     pStat->st_size = rangeEnd + 1 - rangeStart;
   }else{
@@ -1477,15 +1479,15 @@ static int SendFile(
     rangeStart = 0;
   }
   nOut += DateTag("Last-Modified", pStat->st_mtime);
-  nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
-  nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
-  nOut += althttpd_printf("Content-type: %s; charset=utf-8\r\n",zContentType);
-  nOut += althttpd_printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
-  fflush(stdout);
+  nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
+  nOut += fprintf(file,"ETag: \"%s\"\r\n", zETag);
+  nOut += fprintf(file,"Content-type: %s; charset=utf-8\r\n",zContentType);
+  nOut += fprintf(file,"Content-length: %d\r\n\r\n",(int)pStat->st_size);
+  fflush(file);
   if( strcmp(zMethod,"HEAD")==0 ){
     MakeLogEntry(0, 2); /* LOG: Normal HEAD reply */
-    fclose(in);
-    fflush(stdout);
+    fclose(file);
+    fflush(file);
     return 1;
   }
 #ifdef linux
@@ -1853,7 +1855,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   ** method, the script and the protocol.
   */
   omitLog = 1;
-  if( althttpd_fgets(zLine,sizeof(zLine),stdin)==0 ){
+  if( althttpd_fgets(zLine,sizeof(zLine),file)==0 ){
     exit(0);
   }
   gettimeofday(&beginTime, 0);
@@ -1866,7 +1868,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   zProtocol = StrDup(GetFirstElement(z,&z));
   if( zProtocol==0 || strncmp(zProtocol,"HTTP/",5)!=0 || strlen(zProtocol)!=8 ){
     StartResponse("400 Bad Request");
-    nOut += althttpd_printf(
+    nOut += fprintf(file,
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "This server does not understand the requested protocol\n"
@@ -1891,7 +1893,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   if( strcmp(zMethod,"GET")!=0 && strcmp(zMethod,"POST")!=0
        && strcmp(zMethod,"HEAD")!=0 ){
     StartResponse("501 Not Implemented");
-    nOut += althttpd_printf(
+    nOut += fprintf(file,
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "The %s method is not implemented on this server.\n",
@@ -2083,7 +2085,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     size_t len = atoi(zContentLength);
     if( len>MAX_CONTENT_LENGTH ){
       StartResponse("500 Request too large");
-      nOut += althttpd_printf(
+      nOut += fprintf(file,
         "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Too much POST data\n"
@@ -2385,7 +2387,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     /* If it isn't executable then it must be a simple file that needs
     ** to be copied to output.
     */
-    if( SendFile(zFile, lenFile, &statbuf) ){
+    if( SendFile(zFile, lenFile, &statbuf, socketId) ){
       return;
     }
   }
@@ -2506,7 +2508,6 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
     for(i=0; i<n; i++){
       if( FD_ISSET(listener[i], &readfds) ){
         lenaddr = sizeof(inaddr);
-        //connection is an httpConnection (int) / fileDescriptor
         connection = accept(listener[i], &inaddr.sa, &lenaddr);
         if( connection>=0 ){
             //Right HERE
@@ -2518,7 +2519,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
           }else{
             int nErr = 0, fd;
             close(0);
-            fd = dup(connection); //duplicate socket into stdin
+            fd = dup(connection);
             if( fd!=0 ) nErr++;
             close(1);
             fd = dup(connection);
@@ -2539,13 +2540,6 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   /* NOT REACHED */  
   exit(1);
 }
-
-void* threadStarter(void* args){
-    while(1){
-
-    }
-}
-
 
 int main(int argc, const char **argv){
   int i;                     /* Loop counter */
@@ -2646,30 +2640,30 @@ int main(int argc, const char **argv){
     argc -= 2;
   }//Done parsing command line
 
-    pthread_t threadPool[sizeOfThreadPool];
-
+  /*pthread_t threadPool[sizeOfThreadPool];
+    int i;
     for(i = 0; i<sizeOfThreadPool; i++){
-      if(pthread_create(&threadPool[i],NULL,&threadStarter,NULL)!=0){
+      if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
         perror("Thread wasn't created");
       }
-  }
-
-    //Perhaps a for loop using pthread_detach instead of joining just a thought
-    //--Bienstock
-    for(i = 0; i<i<sizeOfThreadPool; i++){
-      if(pthread_detach(&threadPool[i])!=0){
-        perror("Thread couldn't detach");
-      }
-      //Figure out how to use detach, perhaps look at video again
-    }
+  }*/
   /*
+    Perhaps a for loop using pthread_detach instead of joining just a thought
+    --Bienstock
+    for(i=0; i<i<sizeOfThreadPool; i++){
+      if(pthread_detach(&threadPool[i])!=0){
+        perror("Thread couldn't detach")
+      }
+      Figure out how to use detach, perhaps look at video again
+    }
+
     Each 'Worker Thread' can only handle static web pages (files)
 
     Threads read what is on the network descriptor, obtains the specified content
     (by reading the specified static file), and then returns the content to the client
     by writing the to the descriptor
 
-    Create a buffer of size buffersize which holds most likely int (httpConnection variable (the fileDescriptor in main)
+    Create a buffer of size buffersize which holds most likely char *
     to hold the addresses of the requests
 
     Then create a method that has the threads get the requests nd execute them
