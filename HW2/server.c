@@ -2512,21 +2512,29 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
         lenaddr = sizeof(inaddr);
         connection = accept(listener[i], &inaddr.sa, &lenaddr);
         if( connection>=0 ){
+          pthread_t threadPool[sizeOfThreadPool];
+          int i;
+        for(i = 0; i<sizeOfThreadPool; i++){
+          if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
+            perror("Thread wasn't created");
+          }
+        }
+  
             //Right HERE
-          child = fork();
-          if( child!=0 ){
-            if( child>0 ) nchildren++;
-            close(connection);
-            /* printf("subprocess %d started...\n", child); fflush(stdout); */
-          }else{
-            int nErr = 0, fd;
-            close(0);
-            fd = dup(connection);
-            if( fd!=0 ) nErr++;
-            close(1);
-            fd = dup(connection);
-            if( fd!=1 ) nErr++;
-            close(connection);
+          // child = fork();
+          // if( child!=0 ){
+          //   if( child>0 ) nchildren++;
+          //   close(connection);
+          //   /* printf("subprocess %d started...\n", child); fflush(stdout); */
+          // }else{
+          //   int nErr = 0, fd;
+          //   close(0);
+          //   fd = dup(connection);
+          //   if( fd!=0 ) nErr++;
+          //   close(1);
+          //   fd = dup(connection);
+          //   if( fd!=1 ) nErr++;
+          //   close(connection);
             *httpConnection = fd;
             return nErr;
           }
@@ -2541,6 +2549,9 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   }
   /* NOT REACHED */  
   exit(1);
+}
+int createdMethod(){
+  ProcessOneRequest(0, connection)
 }
 
 int main(int argc, const char **argv){
