@@ -282,6 +282,7 @@
 #endif
 #include <assert.h>
 #include <pthread.h>
+#include <threads.h>
 
 /*
 ** Configure the server by setting the following macros and recompiling.
@@ -379,6 +380,7 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 static int schedAlg = 0; /* 1 is FIFO, 2 is HPIC, 3 is HPHC   */
 static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
+thread local int connection;
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -2424,7 +2426,7 @@ typedef union {
 */
 int http_server(const char *zPort, int localOnly, int * httpConnection){
   int listener[20];            /* The server sockets */
-  int connection;              /* A socket for each individual connection */
+  //int connection;              /* A socket for each individual connection */
   fd_set readfds;              /* Set of file descriptors for select() */
   address inaddr;              /* Remote address */
   socklen_t lenaddr;           /* Length of the inaddr structure */
