@@ -380,7 +380,7 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 static int schedAlg = 0; /* 1 is FIFO, 2 is HPIC, 3 is HPHC   */
 static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
-thread local int connection;
+static __thread int connection;
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
