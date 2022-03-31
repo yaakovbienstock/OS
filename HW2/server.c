@@ -1456,7 +1456,7 @@ static int SendFile(
         && (t = ParseRfc822Date(zIfModifiedSince))>0
         && t>=pStat->st_mtime)
   ){    
-    FILE file= fdopen(fd, r+);
+    FILE* file= fdopen(fd, r+);
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
     nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
