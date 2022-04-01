@@ -380,6 +380,7 @@ static int schedAlg = 0;                     /* 1 is FIFO, 2 is HPIC, 3 is HPHC 
 static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
 static __thread int connection;
+static __thread FILE *file;
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -1844,8 +1845,8 @@ static void xferBytes(FILE *in, FILE *out, int nXfer, int nSkip)
 */
 static int SendFile(const char *zFile,  /* Name of the file to send */
                     int lenFile,        /* Length of the zFile name in bytes */
-                    struct stat *pStat, /* Result of a stat() against zFile */
-                    int fd              /* File descriptor for conversion*/
+                    struct stat *pStat /* Result of a stat() against zFile */
+                                  /* File descriptor for conversion*/
 )
 {
   const char *zContentType;
@@ -1862,7 +1863,7 @@ static int SendFile(const char *zFile,  /* Name of the file to send */
   sprintf(zETag, "m%xs%x", (int)pStat->st_mtime, (int)pStat->st_size);
   if (CompareEtags(zIfNoneMatch, zETag) == 0 || (zIfModifiedSince != 0 && (t = ParseRfc822Date(zIfModifiedSince)) > 0 && t >= pStat->st_mtime))
   {
-    FILE *file = fdopen(fd, r +);
+    file = fdopen(connection, "r+");
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
     nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
@@ -3013,7 +3014,7 @@ void ProcessOneRequest(int forceClose, int socketId)
     /* If it isn't executable then it must be a simple file that needs
     ** to be copied to output.
     */
-    if (SendFile(zFile, lenFile, &statbuf, socketId))
+    if (SendFile(zFile, lenFile, &statbuf))
     {
       return;
     }
@@ -3037,6 +3038,11 @@ typedef union
   struct sockaddr_storage sas; /* Should be the maximum of the above 3 */
 } address;
 
+
+void* createdMethod(void* connection)
+{
+    ProcessOneRequest(0, (int)connection);
+}
 /*
 ** Implement an HTTP server daemon listening on port zPort.
 **
@@ -3162,7 +3168,7 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
           int i;
           for (i = 0; i < sizeOfThreadPool; i++)
           {
-            if (pthread_create(&threadPool[i], NULL, &createdMethod, NULL) != 0)
+            if (pthread_create(&threadPool[i], NULL, createdMethod, (void *) connection) != 0)
             {
               perror("Thread wasn't created");
             }
@@ -3183,8 +3189,8 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
           //   fd = dup(connection);
           //   if( fd!=1 ) nErr++;
           //   close(connection);
-          *httpConnection = fd;
-          return nErr;
+          *httpConnection = connection;
+          return 0;
         }
       }
     }
@@ -3195,14 +3201,13 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
       nchildren--;
     }
   }
-}
+
 /* NOT REACHED */
 exit(1);
 }
-int createdMethod()
-{
-  ProcessOneRequest(0, connection);
-}
+
+
+
 
 int main(int argc, const char **argv)
 {
