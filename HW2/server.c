@@ -1864,6 +1864,7 @@ static int SendFile(const char *zFile,  /* Name of the file to send */
   if (CompareEtags(zIfNoneMatch, zETag) == 0 || (zIfModifiedSince != 0 && (t = ParseRfc822Date(zIfModifiedSince)) > 0 && t >= pStat->st_mtime))
   {
     file = fdopen(connection, "r+");
+
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
     nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
