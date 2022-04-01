@@ -3043,6 +3043,7 @@ typedef union
 void* createdMethod(void* connection)
 {
     ProcessOneRequest(0, (int)connection);
+    return 0;
 }
 /*
 ** Implement an HTTP server daemon listening on port zPort.
@@ -3169,7 +3170,7 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
           int i;
           for (i = 0; i < sizeOfThreadPool; i++)
           {
-            if (pthread_create(&threadPool[i], NULL, createdMethod, (void *) connection) != 0)
+            if (pthread_create(&threadPool[i], NULL, createdMethod, (void *) (size_t) connection) != 0)
             {
               perror("Thread wasn't created");
             }
