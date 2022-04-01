@@ -381,6 +381,59 @@ static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
 static __thread int connection;
 static __thread FILE *file;
+struct Node
+{
+  int fd;
+  struct Node* next;
+};
+
+struct Queue
+{
+  struct Node *front, *back;
+};
+struct Node* newNode(int fd){
+    struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
+    temp->key = fd;
+    temp->next = NULL;
+    return temp;
+}
+struct Queue* createQueue(){
+  struct Queue* q= (struct Queue*)malloc(sizeof(struct Queue));
+  q->front=q->back=NULL;
+  return q;
+}
+void enQueue(struct Queue* q, int fd)
+{
+    // Create a new LL node
+    struct Node* temp = newNode(fd);
+ 
+    // If queue is empty, then new node is front and rear both
+    if (q->back == NULL) {
+        q->front = q->back = temp;
+        return;
+    }
+ 
+    // Add the new node at the end of queue and change rear
+    q->back->next = temp;
+    q->back = temp;
+}
+void deQueue(struct Queue* q)
+{
+    // If queue is empty, return NULL.
+    if (q->front == NULL)
+        return;
+ 
+    // Store previous front and move front one node ahead
+    struct Node* temp = q->front;
+ 
+    q->front = q->front->next;
+ 
+    // If front becomes NULL, then change rear also as NULL
+    if (q->front == NULL)
+        q->rear = NULL;
+ 
+    free(temp);
+}
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -3361,6 +3414,7 @@ int main(int argc, const char **argv)
     argv += 2;
     argc -= 2;
   } //Done parsing command line
+  struct Queue* q= createQueue();
 
   /*pthread_t threadPool[sizeOfThreadPool];
     int i;
