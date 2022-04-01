@@ -381,6 +381,7 @@ static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
 static __thread int connection;
 static __thread FILE *file;
+static struct Queue* q;
 struct Node
 {
   int fd;
@@ -3414,7 +3415,7 @@ int main(int argc, const char **argv)
     argv += 2;
     argc -= 2;
   } //Done parsing command line
-  struct Queue* q= createQueue();
+  q= createQueue();
 
   /*pthread_t threadPool[sizeOfThreadPool];
     int i;
