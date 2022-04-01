@@ -394,7 +394,7 @@ struct Queue
 };
 struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
-    temp->key = fd;
+    temp->fd = fd;
     temp->next = NULL;
     return temp;
 }
@@ -431,7 +431,7 @@ void deQueue(struct Queue* q)
  
     // If front becomes NULL, then change rear also as NULL
     if (q->front == NULL)
-        q->rear = NULL;
+        q->back = NULL;
  
     free(temp);
 }
@@ -627,7 +627,7 @@ static void MakeLogEntry(int exitCode, int lineNum)
   }
   if (closeConnection)
   {
-    exit(exitCode);
+    //exit(exitCode);
   }
   statusSent = 0;
 }
