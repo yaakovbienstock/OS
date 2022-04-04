@@ -380,6 +380,7 @@ static int schedAlg = 0;                     /* 1 is FIFO, 2 is HPIC, 3 is HPHC 
 static int sizeOfThreadPool = 0;
 static int bufferSize = 0;
 static __thread int connection;
+static pthread_t *threadpool;
 static __thread FILE *file;
 static struct Queue* q;
 struct Node
@@ -2371,6 +2372,7 @@ static void tls_close_conn(void)
 */
 void ProcessOneRequest(int forceClose, int socketId)
 {
+    //--leak-check=full when you run ValGrind
   int i, j, j0;
   char *z;             /* Used to parse up a string */
   struct stat statbuf; /* Information about the file to be retrieved */
@@ -3220,11 +3222,12 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
         connection = accept(listener[i], &inaddr.sa, &lenaddr);
         if (connection >= 0)
         {
-          pthread_t threadPool[sizeOfThreadPool];
+          //Here? Malloc?
+
           int i;
           for (i = 0; i < sizeOfThreadPool; i++)
           {
-            if (pthread_create(&threadPool[i], NULL, createdMethod, (void *) (size_t) connection) != 0)
+            if (pthread_create(&threadpool[i], NULL, createdMethod, (void *) (size_t) connection) != 0)
             {
               perror("Thread wasn't created");
             }
@@ -3506,6 +3509,9 @@ int main(int argc, const char **argv)
       zRoot = "";
     }
   }
+
+
+    threadpool = malloc(sizeOfThreadPool*sizeof(pthread_t));
 
   /* Activate the server, if requested */
   if (zPort && http_server(zPort, 0, &httpConnection))
