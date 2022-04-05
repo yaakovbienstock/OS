@@ -352,8 +352,8 @@ static char *zIfNoneMatch = 0;               /* The If-None-Match header value *
 static char *zIfModifiedSince = 0;           /* The If-Modified-Since header value */
 static char *zHttpScheme = "http";           /* HTTP_SCHEME CGI variable */
 static char *zHttps = 0;                     /* HTTPS CGI variable */
-static int nIn = 0;                          /* Number of bytes of input */
-static int nOut = 0;                         /* Number of bytes of output */
+static __thread int nIn = 0;                          /* Number of bytes of input */
+static __thread int nOut = 0;                         /* Number of bytes of output */
 static char zReplyStatus[4];                 /* Reply status code */
 static int statusSent = 0;                   /* True after status line is sent */
 static const char *zLogFile = 0;             /* Log to this file */
@@ -815,7 +815,7 @@ static char *Rfc822Date(time_t t)
 */
 static int DateTag(const char *zTag, time_t t)
 {
-  return althttpd_printf("%s: %s\r\n", zTag, Rfc822Date(t));
+  return fprintf(file,"%s: %s\r\n", zTag, Rfc822Date(t));
 }
 
 /*
@@ -908,7 +908,7 @@ static void StartResponse(const char *zResultCode)
 static void NotFound(int lineno)
 {
   StartResponse("404 Not Found");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
       "Content-type: text/html; charset=utf-8\r\n"
       "\r\n"
       "<head><title lineno=\"%d\">Not Found</title></head>\n"
@@ -1918,7 +1918,7 @@ static int SendFile(const char *zFile,  /* Name of the file to send */
   sprintf(zETag, "m%xs%x", (int)pStat->st_mtime, (int)pStat->st_size);
   if (CompareEtags(zIfNoneMatch, zETag) == 0 || (zIfModifiedSince != 0 && (t = ParseRfc822Date(zIfModifiedSince)) > 0 && t >= pStat->st_mtime))
   {
-    file = fdopen(connection, "r+");
+
 
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
@@ -1965,12 +1965,12 @@ static int SendFile(const char *zFile,  /* Name of the file to send */
   if (2 != useHttps)
   {
     off_t offset = rangeStart;
-    nOut += sendfile(fileno(stdout), fileno(in), &offset, pStat->st_size);
+    nOut += sendfile(fileno(file), fileno(in), &offset, pStat->st_size);
   }
   else
 #endif
   {
-    xferBytes(in, stdout, (int)pStat->st_size, rangeStart);
+    xferBytes(in, file, (int)pStat->st_size, rangeStart);
   }
   fclose(in);
   return 0;
@@ -2382,6 +2382,8 @@ void ProcessOneRequest(int forceClose, int socketId)
 #endif
   char zLine[1000]; /* A buffer for input lines or forming names */
 
+  file = fdopen(socketId, "r+");
+  nIn = nOut = 0;
   /* Change directories to the root of the HTTP filesystem
   */
   if (chdir(zRoot[0] ? zRoot : "/") != 0)
@@ -2407,13 +2409,14 @@ void ProcessOneRequest(int forceClose, int socketId)
   ** method, the script and the protocol.
   */
   omitLog = 1;
-  if (althttpd_fgets(zLine, sizeof(zLine), file) == 0)
+    //SegFault right here in if statement, when the Thread-3 or Thread-2 reaches here.
+    if (althttpd_fgets(zLine, sizeof(zLine), file) == 0)
   {
     exit(0);
   }
   gettimeofday(&beginTime, 0);
   omitLog = 0;
-  nIn += strlen(zLine);
+  nIn = strlen(zLine);
 
   /* Parse the first line of the HTTP request */
   zMethod = StrDup(GetFirstElement(zLine, &z));
@@ -2422,7 +2425,7 @@ void ProcessOneRequest(int forceClose, int socketId)
   if (zProtocol == 0 || strncmp(zProtocol, "HTTP/", 5) != 0 || strlen(zProtocol) != 8)
   {
     StartResponse("400 Bad Request");
-    nOut += fprintf(file,
+    nOut = fprintf(file,
                     "Content-type: text/plain; charset=utf-8\r\n"
                     "\r\n"
                     "This server does not understand the requested protocol\n");
@@ -2485,7 +2488,7 @@ void ProcessOneRequest(int forceClose, int socketId)
   zIfModifiedSince = 0;
   zContentLength = 0;
   rangeEnd = 0;
-  while (althttpd_fgets(zLine, sizeof(zLine), stdin))
+  while (althttpd_fgets(zLine, sizeof(zLine), file))
   {
     char *zFieldName;
     char *zVal;
@@ -2704,7 +2707,7 @@ void ProcessOneRequest(int forceClose, int socketId)
     zPostData = SafeMalloc(len + 1);
     if (useTimeout)
       alarm(15 + len / 2000);
-    nPostData = althttpd_fread(zPostData, 1, len, stdin);
+    nPostData = althttpd_fread(zPostData, 1, len, file);
     nIn += nPostData;
   }
 
@@ -3098,7 +3101,7 @@ typedef union
 
 void* createdMethod(void* connection)
 {
-    ProcessOneRequest(0, (int)connection);
+    ProcessOneRequest(1, (int)connection);
     return 0;
 }
 /*
@@ -3214,6 +3217,7 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
         maxFd = listener[i];
     }
     select(maxFd + 1, &readfds, 0, 0, &delay);
+    int threadNum = 0;
     for (i = 0; i < n; i++)
     {
       if (FD_ISSET(listener[i], &readfds))
@@ -3224,14 +3228,15 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
         {
           //Here? Malloc?
 
-          int i;
-          for (i = 0; i < sizeOfThreadPool; i++)
-          {
-            if (pthread_create(&threadpool[i], NULL, createdMethod, (void *) (size_t) connection) != 0)
+//          int i;
+//          for (i = 0; i < sizeOfThreadPool; i++)
+//          {
+           // int i = 0;
+            if (pthread_create(&threadpool[threadNum++], NULL, createdMethod, (void *) (size_t) connection) != 0)
             {
               perror("Thread wasn't created");
             }
-          }
+//          }
 
           //Right HERE
           // child = fork();
@@ -3248,8 +3253,8 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
           //   fd = dup(connection);
           //   if( fd!=1 ) nErr++;
           //   close(connection);
-          *httpConnection = connection;
-          return 0;
+//          *httpConnection = connection;
+//          return 0;
         }
       }
     }
@@ -3519,7 +3524,7 @@ int main(int argc, const char **argv)
     Malfunction(520, /* LOG: server startup failed */
                 "failed to start server");
   }
-
+printf("I should never get here");
 #ifdef RLIMIT_CPU
   if (maxCpu > 0)
   {
