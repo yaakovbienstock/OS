@@ -382,6 +382,8 @@ static int bufferSize = 0;
 static __thread int connection;
 static pthread_t *threadpool;
 static __thread FILE *file;
+static pthread_mutex_t mutexQueue;
+static pthread_cond_t condQueue;
 static struct Queue* q;
 struct Node
 {
@@ -392,6 +394,7 @@ struct Node
 struct Queue
 {
   struct Node *front, *back;
+  int numberOfNodes;
 };
 struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
@@ -402,10 +405,14 @@ struct Node* newNode(int fd){
 struct Queue* createQueue(){
   struct Queue* q= (struct Queue*)malloc(sizeof(struct Queue));
   q->front=q->back=NULL;
+  q->numberOfNodes=0;
   return q;
 }
 void enQueue(struct Queue* q, int fd)
 {
+
+    pthread_mutex_lock(&mutexQueue);
+    q->numberOfNodes++;
     // Create a new LL node
     struct Node* temp = newNode(fd);
  
@@ -418,22 +425,26 @@ void enQueue(struct Queue* q, int fd)
     // Add the new node at the end of queue and change rear
     q->back->next = temp;
     q->back = temp;
+    pthread_mutex_unlock(&mutexQueue);
+    pthread_cond_signal(&condQueue);
+
 }
-void deQueue(struct Queue* q)
+struct Node * deQueue(struct Queue* q)
 {
+
     // If queue is empty, return NULL.
-    if (q->front == NULL)
-        return;
+    if (q->front == NULL) return NULL;
  
     // Store previous front and move front one node ahead
     struct Node* temp = q->front;
+    q->numberOfNodes--;
  
     q->front = q->front->next;
  
     // If front becomes NULL, then change rear also as NULL
-    if (q->front == NULL)
-        q->back = NULL;
- 
+    if (q->front == NULL) q->back = NULL;
+    return temp;
+
     free(temp);
 }
 
@@ -3099,9 +3110,29 @@ typedef union
 } address;
 
 
-void* createdMethod(void* connection)
+void* createdMethod(void* args)
 {
-    ProcessOneRequest(1, (int)connection);
+
+
+    while(1){
+        int fd;
+
+        pthread_mutex_lock(&mutexQueue);
+        while(q->numberOfNodes == 0){
+            pthread_cond_wait(&condQueue, &mutexQueue);
+        }
+
+        struct Node* mynode  = deQueue(q);
+        fd = mynode->fd;
+
+        pthread_mutex_unlock(&mutexQueue);
+
+        ProcessOneRequest(1, fd);
+
+    }
+
+
+
     return 0;
 }
 /*
@@ -3281,7 +3312,10 @@ int main(int argc, const char **argv)
   int useChrootJail = 1;     /* True to use a change-root jail */
   struct passwd *pwd = 0;    /* Information about the user */
   int httpConnection = 0;    /* Socket ID of inbound http connection */
-
+    pthread_mutex_init(&mutexQueue,NULL);
+    pthread_cond_init(&condQueue,NULL);
+    //Where do we free these?
+    //Where should we put the creation of the buffer and the threads?
   /* Record the time when processing begins.
   */
   gettimeofday(&beginTime, 0);
@@ -3425,14 +3459,14 @@ int main(int argc, const char **argv)
     argc -= 2;
   } //Done parsing command line
   q= createQueue();
+  threadpool = malloc(sizeOfThreadPool*sizeof(pthread_t));
 
-  /*pthread_t threadPool[sizeOfThreadPool];
-    int i;
-    for(i = 0; i<sizeOfThreadPool; i++){
-      if(pthread_create(&threadPool[i],NULL,&createdMethod,NULL)!=0){
+    int j;
+    for(j = 0; j<sizeOfThreadPool; j++){
+      if(pthread_create(&threadpool[j],NULL,&createdMethod,NULL)!=0){
         perror("Thread wasn't created");
       }
-  }*/
+  }
   /*
     Perhaps a for loop using pthread_detach instead of joining just a thought
     --Bienstock
@@ -3516,7 +3550,7 @@ int main(int argc, const char **argv)
   }
 
 
-    threadpool = malloc(sizeOfThreadPool*sizeof(pthread_t));
+
 
   /* Activate the server, if requested */
   if (zPort && http_server(zPort, 0, &httpConnection))
