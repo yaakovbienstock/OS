@@ -383,7 +383,8 @@ static __thread int connection;
 static pthread_t *threadpool;
 static __thread FILE *file;
 static pthread_mutex_t mutexQueue;
-static pthread_cond_t condQueue;
+static pthread_cond_t condForConsumer;
+static pthread_cond_t condForProducer;
 static struct Queue* q;
 struct Node
 {
@@ -403,7 +404,7 @@ struct Node* newNode(int fd){
     return temp;
 }
 struct Queue* createQueue(){
-  struct Queue* q= (struct Queue*)malloc(sizeof(struct Queue));
+  struct Queue* q= (struct Queue*)malloc(sizeof(struct Queue)*bufferSize);
   q->front=q->back=NULL;
   q->numberOfNodes=0;
   return q;
@@ -411,7 +412,7 @@ struct Queue* createQueue(){
 void enQueue(struct Queue* q, int fd)
 {
 
-    pthread_mutex_lock(&mutexQueue);
+
     q->numberOfNodes++;
     // Create a new LL node
     struct Node* temp = newNode(fd);
@@ -425,8 +426,6 @@ void enQueue(struct Queue* q, int fd)
     // Add the new node at the end of queue and change rear
     q->back->next = temp;
     q->back = temp;
-    pthread_mutex_unlock(&mutexQueue);
-    pthread_cond_signal(&condQueue);
 
 }
 struct Node * deQueue(struct Queue* q)
@@ -3119,12 +3118,12 @@ void* createdMethod(void* args)
 
         pthread_mutex_lock(&mutexQueue);
         while(q->numberOfNodes == 0){
-            pthread_cond_wait(&condQueue, &mutexQueue);
+            pthread_cond_wait(&condForConsumer, &mutexQueue);
         }
 
         struct Node* mynode  = deQueue(q);
         fd = mynode->fd;
-
+        pthread_cond_signal(&condForProducer);
         pthread_mutex_unlock(&mutexQueue);
 
         ProcessOneRequest(1, fd);
@@ -3247,6 +3246,7 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
       if (listener[i] > maxFd)
         maxFd = listener[i];
     }
+    //Is this related to connection accept?
     select(maxFd + 1, &readfds, 0, 0, &delay);
     int threadNum = 0;
     for (i = 0; i < n; i++)
@@ -3254,39 +3254,34 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
       if (FD_ISSET(listener[i], &readfds))
       {
         lenaddr = sizeof(inaddr);
-        connection = accept(listener[i], &inaddr.sa, &lenaddr);
-        if (connection >= 0)
-        {
-          //Here? Malloc?
+        //put a connection into the buffer
+        //wait for condVarRightHere to check if buffer is full
 
-//          int i;
-//          for (i = 0; i < sizeOfThreadPool; i++)
-//          {
-           // int i = 0;
-            if (pthread_create(&threadpool[threadNum++], NULL, createdMethod, (void *) (size_t) connection) != 0)
-            {
-              perror("Thread wasn't created");
+
+        while(1){
+            pthread_mutex_lock(&mutexQueue);
+            while(q->numberOfNodes==bufferSize){
+                pthread_cond_wait(&condForProducer,&mutexQueue);
             }
-//          }
+            connection = accept(listener[i], &inaddr.sa, &lenaddr);
+            if (connection >= 0)
+            {
+                enQueue(q,connection);
+            }
+            pthread_cond_signal(&condForConsumer);
+            pthread_mutex_unlock(&mutexQueue);
 
-          //Right HERE
-          // child = fork();
-          // if( child!=0 ){
-          //   if( child>0 ) nchildren++;
-          //   close(connection);
-          //   /* printf("subprocess %d started...\n", child); fflush(stdout); */
-          // }else{
-          //   int nErr = 0, fd;
-          //   close(0);
-          //   fd = dup(connection);
-          //   if( fd!=0 ) nErr++;
-          //   close(1);
-          //   fd = dup(connection);
-          //   if( fd!=1 ) nErr++;
-          //   close(connection);
-//          *httpConnection = connection;
-//          return 0;
         }
+
+
+
+
+
+
+          //Test if need to swap
+
+
+
       }
     }
     /* Bury dead children */
@@ -3313,7 +3308,8 @@ int main(int argc, const char **argv)
   struct passwd *pwd = 0;    /* Information about the user */
   int httpConnection = 0;    /* Socket ID of inbound http connection */
     pthread_mutex_init(&mutexQueue,NULL);
-    pthread_cond_init(&condQueue,NULL);
+    pthread_cond_init(&condForConsumer,NULL);
+    pthread_cond_init(&condForProducer,NULL);
     //Where do we free these?
     //Where should we put the creation of the buffer and the threads?
   /* Record the time when processing begins.
@@ -3466,7 +3462,7 @@ int main(int argc, const char **argv)
       if(pthread_create(&threadpool[j],NULL,&createdMethod,NULL)!=0){
         perror("Thread wasn't created");
       }
-  }
+    }
   /*
     Perhaps a for loop using pthread_detach instead of joining just a thought
     --Bienstock
