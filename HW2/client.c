@@ -57,7 +57,7 @@ int establishConnection(struct addrinfo *info) {
 // Send GET request
 void GET(int clientfd, char *host, char *port, char *path) {
   char req[1000] = {0};
-  sprintf(req, "GET %s HTTP/1.1\r\nHost: %s:%s\r\n\r\n", path,host,port);
+  sprintf(req, "GET %s HTTP/1.1\r\nConnection: close\r\nHost: %s:%s\r\n\r\n", path,host,port);
   send(clientfd, req, strlen(req), 0);
 }
 

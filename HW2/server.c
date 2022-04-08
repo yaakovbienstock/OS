@@ -327,8 +327,8 @@ static char *zRealScript = 0;                /* The object to retrieve.  Same as
 static char *zRequestUri = 0;                /* Sanitized request uri */
 static char *zHome = 0;                      /* The directory containing content */
 static char *zQueryString = 0;               /* The query string on the end of the name */
-static char *zFile = 0;                      /* The filename of the object to retrieve */
-static int lenFile = 0;                      /* Length of the zFile name */
+static  char *zFile = 0; //Piazza @103                      /* The filename of the object to retrieve */
+static  int lenFile = 0;                      /* Length of the zFile name */
 static char *zDir = 0;                       /* Name of the directory holding zFile */
 static char *zPathInfo = 0;                  /* Part of the pathname past the file */
 static char *zAgent = 0;                     /* What type if browser is making this query */
@@ -1982,6 +1982,7 @@ static int SendFile(const char *zFile,  /* Name of the file to send */
   {
     xferBytes(in, file, (int)pStat->st_size, rangeStart);
   }
+  fflush(file);
   fclose(in);
   return 0;
 }
@@ -3127,7 +3128,7 @@ void* createdMethod(void* args)
         pthread_mutex_unlock(&mutexQueue);
 
         ProcessOneRequest(1, fd);
-
+        close(fd);
     }
 
 
@@ -3248,7 +3249,7 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
     }
     //Is this related to connection accept?
     select(maxFd + 1, &readfds, 0, 0, &delay);
-    int threadNum = 0;
+
     for (i = 0; i < n; i++)
     {
       if (FD_ISSET(listener[i], &readfds))
@@ -3257,21 +3258,20 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
         //put a connection into the buffer
         //wait for condVarRightHere to check if buffer is full
 
+          connection = accept(listener[i], &inaddr.sa, &lenaddr);
+          if (connection >= 0){
+              pthread_mutex_lock(&mutexQueue);
+              while(q->numberOfNodes==bufferSize){
+                  pthread_cond_wait(&condForProducer,&mutexQueue);
+              }
+              enQueue(q,connection);
+              pthread_cond_signal(&condForConsumer);
+              pthread_mutex_unlock(&mutexQueue);
+          }
 
-        while(1){
-            pthread_mutex_lock(&mutexQueue);
-            while(q->numberOfNodes==bufferSize){
-                pthread_cond_wait(&condForProducer,&mutexQueue);
-            }
-            connection = accept(listener[i], &inaddr.sa, &lenaddr);
-            if (connection >= 0)
-            {
-                enQueue(q,connection);
-            }
-            pthread_cond_signal(&condForConsumer);
-            pthread_mutex_unlock(&mutexQueue);
 
-        }
+
+
 
 
 
