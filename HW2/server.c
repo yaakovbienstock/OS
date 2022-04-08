@@ -386,6 +386,8 @@ static pthread_mutex_t mutexQueue;
 static pthread_cond_t condForConsumer;
 static pthread_cond_t condForProducer;
 static struct Queue* q;
+static struct Queue* lesser;
+static int numBerOfNodesInBothQueues;
 struct Node
 {
   int fd;
@@ -396,6 +398,7 @@ struct Queue
 {
   struct Node *front, *back;
   int numberOfNodes;
+
 };
 struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
@@ -404,6 +407,7 @@ struct Node* newNode(int fd){
     return temp;
 }
 struct Queue* createQueue(){
+
   struct Queue* q= (struct Queue*)malloc(sizeof(struct Queue)*bufferSize);
   q->front=q->back=NULL;
   q->numberOfNodes=0;
@@ -412,7 +416,7 @@ struct Queue* createQueue(){
 void enQueue(struct Queue* q, int fd)
 {
 
-
+    numBerOfNodesInBothQueues++;
     q->numberOfNodes++;
     // Create a new LL node
     struct Node* temp = newNode(fd);
@@ -437,6 +441,7 @@ struct Node * deQueue(struct Queue* q)
     // Store previous front and move front one node ahead
     struct Node* temp = q->front;
     q->numberOfNodes--;
+    numBerOfNodesInBothQueues--;
  
     q->front = q->front->next;
  
@@ -3116,19 +3121,39 @@ void* createdMethod(void* args)
 
     while(1){
         int fd;
+        if(schedAlg==1){
+            pthread_mutex_lock(&mutexQueue);
+            while(q->numberOfNodes == 0){
+                pthread_cond_wait(&condForConsumer, &mutexQueue);
+            }
 
-        pthread_mutex_lock(&mutexQueue);
-        while(q->numberOfNodes == 0){
-            pthread_cond_wait(&condForConsumer, &mutexQueue);
+            struct Node* mynode  = deQueue(q);
+            fd = mynode->fd;
+            pthread_cond_signal(&condForProducer);
+            pthread_mutex_unlock(&mutexQueue);
+
+            ProcessOneRequest(1, fd);
+            close(fd);
+        }else{
+            pthread_mutex_lock(&mutexQueue);
+            while(numBerOfNodesInBothQueues == 0){
+                pthread_cond_wait(&condForConsumer, &mutexQueue);
+            }
+            struct Node* mynode;
+            if(q->numberOfNodes>0){
+                mynode  = deQueue(q);
+            }else{
+                mynode  = deQueue(lesser);
+            }
+
+            fd = mynode->fd;
+            pthread_cond_signal(&condForProducer);
+            pthread_mutex_unlock(&mutexQueue);
+
+            ProcessOneRequest(1, fd);
+            close(fd);
         }
 
-        struct Node* mynode  = deQueue(q);
-        fd = mynode->fd;
-        pthread_cond_signal(&condForProducer);
-        pthread_mutex_unlock(&mutexQueue);
-
-        ProcessOneRequest(1, fd);
-        close(fd);
     }
 
 
@@ -3257,17 +3282,61 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
         lenaddr = sizeof(inaddr);
         //put a connection into the buffer
         //wait for condVarRightHere to check if buffer is full
+            if(schedAlg==1){//FIFO
+                connection = accept(listener[i], &inaddr.sa, &lenaddr);
+                if (connection >= 0){
+                    pthread_mutex_lock(&mutexQueue);
+                    while(q->numberOfNodes==bufferSize){
+                        pthread_cond_wait(&condForProducer,&mutexQueue);
+                    }
+                    enQueue(q,connection);
+                    pthread_cond_signal(&condForConsumer);
+                    pthread_mutex_unlock(&mutexQueue);
+                }
+            }else if(schedAlg==2){// 2 is HPIC - priority to jpg
+                //recv(listener[i], &inaddr.sa, &lenaddr, MSG_PEEK);
+                //int isThisImageContent?
+                connection = accept(listener[i], &inaddr.sa, &lenaddr);
+                if (connection >= 0){
+                    pthread_mutex_lock(&mutexQueue);
 
-          connection = accept(listener[i], &inaddr.sa, &lenaddr);
-          if (connection >= 0){
-              pthread_mutex_lock(&mutexQueue);
-              while(q->numberOfNodes==bufferSize){
-                  pthread_cond_wait(&condForProducer,&mutexQueue);
-              }
-              enQueue(q,connection);
-              pthread_cond_signal(&condForConsumer);
-              pthread_mutex_unlock(&mutexQueue);
-          }
+                    /*
+                     * q is for image content/top priority content
+                     */
+                    while(numBerOfNodesInBothQueues==bufferSize){
+                        pthread_cond_wait(&condForProducer,&mutexQueue);
+                    }
+//                    if(){//its image
+//                        enQueue(q,connection);
+//                    }else{
+//                        enQueue(lesser,connection);
+//                    }
+
+                    pthread_cond_signal(&condForConsumer);
+                    pthread_mutex_unlock(&mutexQueue);
+                }
+            }else{// 3 is HPHC //Priority to HTML
+                //recv(listener[i], &inaddr.sa, &lenaddr, MSG_PEEK);
+                connection = accept(listener[i], &inaddr.sa, &lenaddr);
+                if (connection >= 0){
+                    pthread_mutex_lock(&mutexQueue);
+
+                    /*
+                     * q is for HTML content/top priority content
+                     */
+                    while(numBerOfNodesInBothQueues==bufferSize){
+                        pthread_cond_wait(&condForProducer,&mutexQueue);
+                    }
+//                    if(){//its HTML
+//                        enQueue(q,connection);
+//                    }else{
+//                        enQueue(lesser,connection);
+//                    }
+                    pthread_cond_signal(&condForConsumer);
+                    pthread_mutex_unlock(&mutexQueue);
+                }
+            }
+
 
 
 
@@ -3454,7 +3523,17 @@ int main(int argc, const char **argv)
     argv += 2;
     argc -= 2;
   } //Done parsing command line
-  q= createQueue();
+
+
+    q = createQueue();
+  if(schedAlg!=1){
+      lesser = createQueue();
+  }
+
+
+
+
+
   threadpool = malloc(sizeOfThreadPool*sizeof(pthread_t));
 
     int j;
