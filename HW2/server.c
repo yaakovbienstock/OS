@@ -388,10 +388,17 @@ static pthread_cond_t condForProducer;
 static struct Queue* q;
 static struct Queue* lesser;
 static int numBerOfNodesInBothQueues;
+static __thread int X-stat-thread-id;
+static __thread int X-stat-thread-count=0;
+static __thread int X-stat-thread-html=0;
+static __thread int X-stat-thread-image=0;
+static struct timeval currentTime;
 struct Node
 {
   int fd;
   struct Node* next;
+  int arrival_time;
+  int dispatch_time;
 };
 
 struct Queue
@@ -404,6 +411,7 @@ struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
     temp->fd = fd;
     temp->next = NULL;
+    temp->arrival_time=beginTime-gettimeofday(&currentTime);
     return temp;
 }
 struct Queue* createQueue(){
@@ -447,6 +455,7 @@ struct Node * deQueue(struct Queue* q)
  
     // If front becomes NULL, then change rear also as NULL
     if (q->front == NULL) q->back = NULL;
+    temp->dispatch_time=beginTime-gettimeofday(&currentTime);
     return temp;
 
     free(temp);
@@ -912,7 +921,7 @@ static void StartResponse(const char *zResultCode)
   nOut += DateTag("Date", now);
 
   //Send the statistical headers described in the paper, example below
-  //nOut += althttpd_printf("X-stat-req-arrival-count: %d\r\n", xStatReqArrivalCount");
+  //nOut += fprintf(file, "X-stat-req-arrival-count: %d\r\n", xStatReqArrivalCount");
 
   statusSent = 1;
 }
