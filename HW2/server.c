@@ -388,17 +388,23 @@ static pthread_cond_t condForProducer;
 static struct Queue* q;
 static struct Queue* lesser;
 static int numBerOfNodesInBothQueues;
-static __thread int X-stat-thread-id;
-static __thread int X-stat-thread-count=0;
-static __thread int X-stat-thread-html=0;
-static __thread int X-stat-thread-image=0;
+static __thread int X_stat_thread_id;
+static __thread int X_stat_thread_count=0;
+static __thread int X_stat_thread_html=0;
+static __thread int X_stat_thread_image=0;
+static int arrival_count = 0;//Needs a mutex
+static int dispatch_count=0;//Needs a mutex
+static int complete_count=0;
 static struct timeval currentTime;
+static char* mimeTypeMain;
 struct Node
 {
   int fd;
   struct Node* next;
   int arrival_time;
   int dispatch_time;
+  int complete_time;
+  int age;
 };
 
 struct Queue
@@ -411,7 +417,7 @@ struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
     temp->fd = fd;
     temp->next = NULL;
-    temp->arrival_time=beginTime-gettimeofday(&currentTime);
+    //temp->arrival_time=beginTime-gettimeofday(&currentTime, 0);
     return temp;
 }
 struct Queue* createQueue(){
@@ -455,7 +461,7 @@ struct Node * deQueue(struct Queue* q)
  
     // If front becomes NULL, then change rear also as NULL
     if (q->front == NULL) q->back = NULL;
-    temp->dispatch_time=beginTime-gettimeofday(&currentTime);
+    //temp->dispatch_time=beginTime-gettimeofday(&currentTime);
     return temp;
 
     free(temp);
@@ -2378,6 +2384,466 @@ static void tls_close_conn(void)
 {
 }
 
+void ProcessOneRequestMAIN(int forceClose, int socketId) {
+    //--leak-check=full when you run ValGrind
+    int i, j, j0;
+    char *z;             /* Used to parse up a string */
+    struct stat statbuf; /* Information about the file to be retrieved */
+    FILE *in;            /* For reading from CGI scripts */
+#ifdef LOG_HEADER
+    FILE *hdrLog = 0; /* Log file for complete header content */
+#endif
+    char zLine[1000]; /* A buffer for input lines or forming names */
+
+    file = fdopen(socketId, "r+");
+    nIn = nOut = 0;
+    /* Change directories to the root of the HTTP filesystem
+    */
+    if (chdir(zRoot[0] ? zRoot : "/") != 0) {
+        char zBuf[1000];
+        Malfunction(190, /* LOG: chdir() failed */
+                    "cannot chdir to [%s] from [%s]",
+                    zRoot, getcwd(zBuf, sizeof(zBuf) - 1));
+    }
+    nRequest++;
+    tls_init_conn(socketId);
+    /*
+    ** We must receive a complete header within 15 seconds
+    */
+    signal(SIGALRM, Timeout);
+    signal(SIGSEGV, Timeout);
+    signal(SIGPIPE, Timeout);
+    signal(SIGXCPU, Timeout);
+    if (useTimeout)
+        alarm(15);
+
+    /* Get the first line of the request and parse out the
+    ** method, the script and the protocol.
+    */
+    omitLog = 1;
+    //SegFault right here in if statement, when the Thread-3 or Thread-2 reaches here.
+    if (althttpd_fgets(zLine, sizeof(zLine), file) == 0) {
+        exit(0);
+    }
+    gettimeofday(&beginTime, 0);
+    omitLog = 0;
+    nIn = strlen(zLine);
+
+    /* Parse the first line of the HTTP request */
+    zMethod = StrDup(GetFirstElement(zLine, &z));
+    zRealScript = zScript = StrDup(GetFirstElement(z, &z));
+    zProtocol = StrDup(GetFirstElement(z, &z));
+    if (zProtocol == 0 || strncmp(zProtocol, "HTTP/", 5) != 0 || strlen(zProtocol) != 8) {
+        StartResponse("400 Bad Request");
+        nOut = fprintf(file,
+                       "Content-type: text/plain; charset=utf-8\r\n"
+                       "\r\n"
+                       "This server does not understand the requested protocol\n");
+        MakeLogEntry(0, 200); /* LOG: bad protocol in HTTP header */
+        exit(0);
+    }
+    if (zScript[0] != '/')
+        NotFound(210); /* LOG: Empty request URI */
+    while (zScript[1] == '/') {
+        zScript++;
+        zRealScript++;
+    }
+    if (forceClose) {
+        closeConnection = 1;
+    } else if (zProtocol[5] < '1' || zProtocol[7] < '1') {
+        closeConnection = 1;
+    }
+
+    /* This very simple server only understands the GET, POST
+    ** and HEAD methods
+    */
+    if (strcmp(zMethod, "GET") != 0 && strcmp(zMethod, "POST") != 0 && strcmp(zMethod, "HEAD") != 0) {
+        StartResponse("501 Not Implemented");
+        nOut += fprintf(file,
+                        "Content-type: text/plain; charset=utf-8\r\n"
+                        "\r\n"
+                        "The %s method is not implemented on this server.\n",
+                        zMethod);
+        MakeLogEntry(0, 220); /* LOG: Unknown request method */
+        exit(0);
+    }
+
+    /* If there is a log file (if zLogFile!=0) and if the pathname in
+    ** the first line of the http request contains the magic string
+    ** "FullHeaderLog" then write the complete header text into the
+    ** file %s(zLogFile)-hdr.  Overwrite the file.  This is for protocol
+    ** debugging only and is only enabled if althttpd is compiled with
+    ** the -DLOG_HEADER=1 option.
+    */
+#ifdef LOG_HEADER
+    if (zLogFile && strstr(zScript, "FullHeaderLog") != 0 && strlen(zLogFile) < sizeof(zLine) - 50)
+  {
+    sprintf(zLine, "%s-hdr", zLogFile);
+    hdrLog = fopen(zLine, "wb");
+  }
+#endif
+
+    /* Get all the optional fields that follow the first line.
+    */
+    zCookie = 0;
+    zAuthType = 0;
+    zRemoteUser = 0;
+    zReferer = 0;
+    zIfNoneMatch = 0;
+    zIfModifiedSince = 0;
+    zContentLength = 0;
+    rangeEnd = 0;
+    while (althttpd_fgets(zLine, sizeof(zLine), file)) {
+        char *zFieldName;
+        char *zVal;
+
+#ifdef LOG_HEADER
+        if (hdrLog)
+      fprintf(hdrLog, "%s", zLine);
+#endif
+        nIn += strlen(zLine);
+        zFieldName = GetFirstElement(zLine, &zVal);
+        if (zFieldName == 0 || *zFieldName == 0)
+            break;
+        RemoveNewline(zVal);
+        if (strcasecmp(zFieldName, "User-Agent:") == 0) {
+            zAgent = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Accept:") == 0) {
+            zAccept = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Accept-Encoding:") == 0) {
+            zAcceptEncoding = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Content-length:") == 0) {
+            zContentLength = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Content-type:") == 0) {
+            zContentType = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Referer:") == 0) {
+            zReferer = StrDup(zVal);
+            if (strstr(zVal, "devids.net/") != 0) {
+                zReferer = "devids.net.smut";
+                Forbidden(230); /* LOG: Referrer is devids.net */
+            }
+        } else if (strcasecmp(zFieldName, "Cookie:") == 0) {
+            zCookie = StrAppend(zCookie, "; ", zVal);
+        } else if (strcasecmp(zFieldName, "Connection:") == 0) {
+            if (strcasecmp(zVal, "close") == 0) {
+                closeConnection = 1;
+            } else if (!forceClose && strcasecmp(zVal, "keep-alive") == 0) {
+                closeConnection = 0;
+            }
+        } else if (strcasecmp(zFieldName, "Host:") == 0) {
+            int inSquare = 0;
+            char c;
+            if (sanitizeString(zVal)) {
+                Forbidden(240); /* LOG: Illegal content in HOST: parameter */
+            }
+            zHttpHost = StrDup(zVal);
+            zServerPort = zServerName = StrDup(zHttpHost);
+            while (zServerPort && (c = *zServerPort) != 0 && (c != ':' || inSquare)) {
+                if (c == '[')
+                    inSquare = 1;
+                if (c == ']')
+                    inSquare = 0;
+                zServerPort++;
+            }
+            if (zServerPort && *zServerPort) {
+                *zServerPort = 0;
+                zServerPort++;
+            }
+            if (zRealPort) {
+                zServerPort = StrDup(zRealPort);
+            }
+        } else if (strcasecmp(zFieldName, "Authorization:") == 0) {
+            zAuthType = GetFirstElement(StrDup(zVal), &zAuthArg);
+        } else if (strcasecmp(zFieldName, "If-None-Match:") == 0) {
+            zIfNoneMatch = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "If-Modified-Since:") == 0) {
+            zIfModifiedSince = StrDup(zVal);
+        } else if (strcasecmp(zFieldName, "Range:") == 0 && strcmp(zMethod, "GET") == 0) {
+            int x1 = 0, x2 = 0;
+            int n = sscanf(zVal, "bytes=%d-%d", &x1, &x2);
+            if (n == 2 && x1 >= 0 && x2 >= x1) {
+                rangeStart = x1;
+                rangeEnd = x2;
+            } else if (n == 1 && x1 > 0) {
+                rangeStart = x1;
+                rangeEnd = 0x7fffffff;
+            }
+        }
+    }
+#ifdef LOG_HEADER
+    if (hdrLog)
+    fclose(hdrLog);
+#endif
+
+    /* Disallow requests from certain clients */
+    if (zAgent) {
+        const char *azDisallow[] = {
+                "Windows 9",
+                "Download Master",
+                "Ezooms/",
+                "HTTrace",
+                "AhrefsBot",
+                "MicroMessenger",
+                "OPPO A33 Build",
+                "SemrushBot",
+                "MegaIndex.ru",
+                "MJ12bot",
+                "Chrome/0.A.B.C",
+                "Neevabot/",
+                "BLEXBot/",
+        };
+        size_t ii;
+        for (ii = 0; ii < sizeof(azDisallow) / sizeof(azDisallow[0]); ii++) {
+            if (strstr(zAgent, azDisallow[ii]) != 0) {
+                Forbidden(250); /* LOG: Disallowed user agent */
+            }
+        }
+#if 0
+        /* Spider attack from 2019-04-24 */
+    if( strcmp(zAgent,
+            "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")==0 ){
+      Forbidden(251);  /* LOG: Disallowed user agent (20190424) */
+    }
+#endif
+    }
+#if 0
+    if( zReferer ){
+    static const char *azDisallow[] = {
+      "skidrowcrack.com",
+      "hoshiyuugi.tistory.com",
+      "skidrowgames.net",
+    };
+    int i;
+    for(i=0; i<sizeof(azDisallow)/sizeof(azDisallow[0]); i++){
+      if( strstr(zReferer, azDisallow[i])!=0 ){
+        NotFound(260);  /* LOG: Disallowed referrer */
+      }
+    }
+  }
+#endif
+
+    /* Make an extra effort to get a valid server name and port number.
+    ** Only Netscape provides this information.  If the browser is
+    ** Internet Explorer, then we have to find out the information for
+    ** ourselves.
+    */
+    if (zServerName == 0) {
+        zServerName = SafeMalloc(100);
+        gethostname(zServerName, 100);
+    }
+    if (zServerPort == 0 || *zServerPort == 0) {
+        zServerPort = DEFAULT_PORT;
+    }
+
+    /* Remove the query string from the end of the requested file.
+    */
+    for (z = zScript; *z && *z != '?'; z++) {
+    }
+    if (*z == '?') {
+        zQuerySuffix = StrDup(z);
+        *z = 0;
+    } else {
+        zQuerySuffix = "";
+    }
+    zQueryString = *zQuerySuffix ? &zQuerySuffix[1] : zQuerySuffix;
+
+    /* Create either a memory buffer to hold the POST query data */
+    if (zMethod[0] == 'P' && zContentLength != 0) {
+        size_t len = atoi(zContentLength);
+        if (len > MAX_CONTENT_LENGTH) {
+            StartResponse("500 Request too large");
+            nOut += fprintf(file,
+                            "Content-type: text/plain; charset=utf-8\r\n"
+                            "\r\n"
+                            "Too much POST data\n");
+            MakeLogEntry(0, 270); /* LOG: Request too large */
+            exit(0);
+        }
+        rangeEnd = 0;
+        zPostData = SafeMalloc(len + 1);
+        if (useTimeout)
+            alarm(15 + len / 2000);
+        nPostData = althttpd_fread(zPostData, 1, len, file);
+        nIn += nPostData;
+    }
+
+    /* Make sure the running time is not too great */
+    if (useTimeout)
+        alarm(30);
+
+    /* Convert all unusual characters in the script name into "_".
+    **
+    ** This is a defense against various attacks, XSS attacks in particular.
+    */
+    sanitizeString(zScript);
+
+    /* Do not allow "/." or "/-" to to occur anywhere in the entity name.
+    ** This prevents attacks involving ".." and also allows us to create
+    ** files and directories whose names begin with "-" or "." which are
+    ** invisible to the webserver.
+    **
+    ** Exception:  Allow the "/.well-known/" prefix in accordance with
+    ** RFC-5785.
+    */
+    for (z = zScript; *z; z++) {
+        if (*z == '/' && (z[1] == '.' || z[1] == '-')) {
+            if (strncmp(zScript, "/.well-known/", 13) == 0 && (z[1] != '.' || z[2] != '.')) {
+                /* Exception:  Allow "/." and "/-" for URLs that being with
+                ** "/.well-known/".  But do not allow "/..". */
+                continue;
+            }
+            NotFound(300); /* LOG: Path element begins with "." or "-" */
+        }
+    }
+
+    /* Figure out what the root of the filesystem should be.  If the
+    ** HTTP_HOST parameter exists (stored in zHttpHost) then remove the
+    ** port number from the end (if any), convert all characters to lower
+    ** case, and convert non-alphanumber characters (including ".") to "_".
+    ** Then try to find a directory with that name and the extension .website.
+    ** If not found, look for "default.website".
+    */
+    if (zScript[0] != '/') {
+        NotFound(310); /* LOG: URI does not start with "/" */
+    }
+    if (strlen(zRoot) + 40 >= sizeof(zLine)) {
+        NotFound(320); /* LOG: URI too long */
+    }
+    if (zHttpHost == 0 || zHttpHost[0] == 0) {
+        NotFound(330); /* LOG: Missing HOST: parameter */
+    } else if (strlen(zHttpHost) + strlen(zRoot) + 10 >= sizeof(zLine)) {
+        NotFound(340); /* LOG: HOST parameter too long */
+    } else {
+        sprintf(zLine, "%s/%s", zRoot, zHttpHost);
+        for (i = strlen(zRoot) + 1; zLine[i] && zLine[i] != ':'; i++) {
+            unsigned char c = (unsigned char) zLine[i];
+            if (!isalnum(c)) {
+                if (c == '.' && (zLine[i + 1] == 0 || zLine[i + 1] == ':')) {
+                    /* If the client sent a FQDN with a "." at the end
+                    ** (example: "sqlite.org." instead of just "sqlite.org") then
+                    ** omit the final "." from the document root directory name */
+                    break;
+                }
+                zLine[i] = '_';
+            } else if (isupper(c)) {
+                zLine[i] = tolower(c);
+            }
+        }
+        strcpy(&zLine[i], ".website");
+    }
+    if (stat(zLine, &statbuf) || !S_ISDIR(statbuf.st_mode)) {
+        sprintf(zLine, "%s/default.website", zRoot);
+        if (stat(zLine, &statbuf) || !S_ISDIR(statbuf.st_mode)) {
+            if (standalone) {
+                sprintf(zLine, "%s", zRoot);
+            } else {
+                NotFound(350); /* LOG: *.website permissions */
+            }
+        }
+    }
+    zHome = StrDup(zLine);
+    /* Change directories to the root of the HTTP filesystem
+    */
+    if (chdir(zHome) != 0) {
+        char zBuf[1000];
+        Malfunction(360, /* LOG: chdir() failed */
+                    "cannot chdir to [%s] from [%s]",
+                    zHome, getcwd(zBuf, 999));
+    }
+
+    /* Locate the file in the filesystem.  We might have to append
+    ** a name like "/home" or "/index.html" or "/index.cgi" in order
+    ** to find it.  Any excess path information is put into the
+    ** zPathInfo variable.
+    */
+    j = j0 = (int) strlen(zLine);
+    i = 0;
+    while (zScript[i]) {
+        while (zScript[i] && (i == 0 || zScript[i] != '/')) {
+            zLine[j] = zScript[i];
+            i++;
+            j++;
+        }
+        zLine[j] = 0;
+        if (stat(zLine, &statbuf) != 0) {
+            int stillSearching = 1;
+            while (stillSearching && i > 0 && j > j0) {
+                while (j > j0 && zLine[j - 1] != '/') {
+                    j--;
+                }
+                strcpy(&zLine[j - 1], "/not-found.html");
+                if (stat(zLine, &statbuf) == 0 && S_ISREG(statbuf.st_mode) && access(zLine, R_OK) == 0) {
+                    zRealScript = StrDup(&zLine[j0]);
+                    Redirect(zRealScript, 302, 1, 370); /* LOG: redirect to not-found */
+                    return;
+                } else {
+                    j--;
+                }
+            }
+            if (stillSearching)
+                NotFound(380); /* LOG: URI not found */
+            break;
+        }
+        if (S_ISREG(statbuf.st_mode)) {
+            if (access(zLine, R_OK)) {
+                NotFound(390); /* LOG: File not readable */
+            }
+            zRealScript = StrDup(&zLine[j0]);
+            break;
+        }
+        if (zScript[i] == 0 || zScript[i + 1] == 0) {
+            static const char *azIndex[] = {"/home", "/index", "/index.html", "/index.cgi"};
+            int k = j > 0 && zLine[j - 1] == '/' ? j - 1 : j;
+            unsigned int jj;
+            for (jj = 0; jj < sizeof(azIndex) / sizeof(azIndex[0]); jj++) {
+                strcpy(&zLine[k], azIndex[jj]);
+                if (stat(zLine, &statbuf) != 0)
+                    continue;
+                if (!S_ISREG(statbuf.st_mode))
+                    continue;
+                if (access(zLine, R_OK))
+                    continue;
+                break;
+            }
+            if (jj >= sizeof(azIndex) / sizeof(azIndex[0])) {
+                NotFound(400); /* LOG: URI is a directory w/o index.html */
+            }
+            zRealScript = StrDup(&zLine[j0]);
+            if (zScript[i] == 0) {
+                /* If the requested URL does not end with "/" but we had to
+                ** append "index.html", then a redirect is necessary.  Otherwise
+                ** none of the relative URLs in the delivered document will be
+                ** correct. */
+                Redirect(zRealScript, 301, 1, 410); /* LOG: redirect to add trailing / */
+                return;
+            }
+            break;
+        }
+        zLine[j] = zScript[i];
+        i++;
+        j++;
+    }
+    zFile = StrDup(zLine);
+    zPathInfo = StrDup(&zScript[i]);
+    lenFile = strlen(zFile);
+    zDir = StrDup(zFile);
+    for (i = strlen(zDir) - 1; i > 0 && zDir[i] != '/'; i--) {
+    };
+
+    mimeTypeMain = GetMimeType(zFile,lenFile);
+    return;
+
+}
+
+
+
+
+
+
+
+
+
 /*
 ** This routine processes a single HTTP request on standard input and
 ** sends the reply to standard output.  If the argument is 1 it means
@@ -2934,6 +3400,12 @@ void ProcessOneRequest(int forceClose, int socketId)
   for (i = strlen(zDir) - 1; i > 0 && zDir[i] != '/'; i--)
   {
   };
+
+
+
+
+
+
   if (i == 0)
   {
     strcpy(zDir, "/");
@@ -3303,9 +3775,20 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
                     pthread_mutex_unlock(&mutexQueue);
                 }
             }else if(schedAlg==2){// 2 is HPIC - priority to jpg
-                //recv(listener[i], &inaddr.sa, &lenaddr, MSG_PEEK);
-                //int isThisImageContent?
+                int imageContent;
                 connection = accept(listener[i], &inaddr.sa, &lenaddr);
+                void *BigOlBuffer = malloc(10000);
+                ssize_t rec = recv(connection, BigOlBuffer, 10000, MSG_PEEK);
+
+                //ProcessOneRequestMAIN(1, );
+                if(strcmp(mimeTypeMain,"text/html; charset=utf-8")){
+                    imageContent = 0;
+                }else{//Jpg
+                    imageContent = 1;
+                }
+
+                //Make a new file descriptor that points to BigOlBuffer
+                //Call POR with this new file descriptor, bail out once you have your info.
                 if (connection >= 0){
                     pthread_mutex_lock(&mutexQueue);
 
@@ -3315,11 +3798,11 @@ int http_server(const char *zPort, int localOnly, int *httpConnection)
                     while(numBerOfNodesInBothQueues==bufferSize){
                         pthread_cond_wait(&condForProducer,&mutexQueue);
                     }
-//                    if(){//its image
-//                        enQueue(q,connection);
-//                    }else{
-//                        enQueue(lesser,connection);
-//                    }
+                    if(imageContent==1){//its image
+                        enQueue(q,connection);
+                    }else{
+                        enQueue(lesser,connection);
+                    }
 
                     pthread_cond_signal(&condForConsumer);
                     pthread_mutex_unlock(&mutexQueue);
