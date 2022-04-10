@@ -401,9 +401,9 @@ struct Node
 {
   int fd;
   struct Node* next;
-  int arrival_time;
-  int dispatch_time;
-  int complete_time;
+  struct timeval arrivalTime;
+  struct timeval dispatchTime;
+  struct timeval completeTime;
   int age;
 };
 
@@ -417,7 +417,8 @@ struct Node* newNode(int fd){
     struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
     temp->fd = fd;
     temp->next = NULL;
-    //temp->arrival_time=beginTime-gettimeofday(&currentTime, 0);
+    gettimeofday(&currentTime, 0);
+    timersub(&currentTime, &beginTime, &arrivalTime);
     return temp;
 }
 struct Queue* createQueue(){
@@ -461,7 +462,8 @@ struct Node * deQueue(struct Queue* q)
  
     // If front becomes NULL, then change rear also as NULL
     if (q->front == NULL) q->back = NULL;
-    //temp->dispatch_time=beginTime-gettimeofday(&currentTime);
+    gettimeofday(&currentTime, 0);
+    timersub(&currentTime, &beginTime, &dispatchTime);
     return temp;
 
     free(temp);
